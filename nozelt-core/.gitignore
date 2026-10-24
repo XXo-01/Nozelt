@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+*.aar
+*.jar
+
+# Vendored dependencies (we use go.mod, not vendor/)
+vendor/
+
+# IDE / editor
+.idea/
+.vscode/
+
+# Logs
+*.log

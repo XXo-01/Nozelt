@@ -1,0 +1,56 @@
+name: nozelt
+description: "Nozelt VPN client (Flutter front-end for the nozelt-core Go engine)."
+publish_to: 'none'
+
+version: 1.0.0+37
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management.
+  flutter_riverpod: ^3.3.2
+
+  # Used by the generated fromJson/toJson on engine model classes
+  # (Status, Traffic, LogEntry).
+  json_annotation: ^4.12.0
+
+  # Iteration 4: profiles & subscriptions.
+  http: ^1.2.2            # download subscription URLs (Dart-side only)
+  ffi: ^2.2.0
+  uuid: ^4.6.0
+  mobile_scanner: ^7.4.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+  alchemist: ^0.14.1
+
+  # Code-gen for json_annotation. Run with:
+  #   dart run build_runner build --delete-conflicting-outputs
+  build_runner: ^2.15.1
+  json_serializable: ^6.8.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/nozelt_new_logo.png
+    - assets/branding/nozelt_new_master_logo.png
+    - assets/branding/nozelt_desktop_logo.png
+    - assets/flags/
+    - assets/licenses/
+  fonts:
+    - family: Runzoe
+      fonts:
+        - asset: assets/fonts/Runzoe-Regular.otf
+        - asset: assets/fonts/Runzoe-Italic.otf
+          style: italic

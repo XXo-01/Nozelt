@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nozelt</string>
+    <string name="vpn_channel_name">VPN service</string>
+    <string name="vpn_channel_description">Persistent notification while the VPN tunnel is active.</string>
+    <string name="vpn_notification_active">VPN is active</string>
+    <string name="vpn_notification_recovering">Restoring secure tunnel; traffic is blocked</string>
+    <string name="vpn_notification_server_unknown">Last selected server</string>
+    <string name="vpn_notification_details">%1$s %2$s · %3$s</string>
+    <string name="vpn_notification_ping">%1$d ms</string>
+    <string name="vpn_notification_ping_unknown">— ms</string>
+    <string name="vpn_notification_disconnect">Disconnect</string>
+    <string name="quick_settings_tile_label">Nozelt</string>
+    <string name="quick_settings_tile_active">VPN active</string>
+    <string name="quick_settings_tile_inactive">Connect</string>
+</resources>

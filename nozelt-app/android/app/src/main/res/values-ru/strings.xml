@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nozelt</string>
+    <string name="vpn_channel_name">Сервис VPN</string>
+    <string name="vpn_channel_description">Постоянное уведомление, пока VPN активен.</string>
+    <string name="vpn_notification_active">VPN активен</string>
+    <string name="vpn_notification_recovering">Восстановление VPN; трафик заблокирован</string>
+    <string name="vpn_notification_server_unknown">Последний выбранный сервер</string>
+    <string name="vpn_notification_details">%1$s %2$s · %3$s</string>
+    <string name="vpn_notification_ping">%1$d мс</string>
+    <string name="vpn_notification_ping_unknown">— мс</string>
+    <string name="vpn_notification_disconnect">Отключить</string>
+    <string name="quick_settings_tile_label">Nozelt</string>
+    <string name="quick_settings_tile_active">VPN активен</string>
+    <string name="quick_settings_tile_inactive">Подключить</string>
+</resources>

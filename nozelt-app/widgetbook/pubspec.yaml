@@ -1,0 +1,36 @@
+name: nozelt_widgetbook
+description: "Local visual catalogue for Nozelt's shared Windows/Android UI."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  nozelt:
+    path: ..
+  # 3.24+ requires Flutter >=3.44; keep the app's verified Flutter 3.41 SDK.
+  widgetbook: '>=3.23.0 <3.24.0'
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/roboto_license.txt
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/roboto-regular.ttf
+          weight: 400
+        - asset: assets/fonts/roboto-medium.ttf
+          weight: 500
+        - asset: assets/fonts/roboto-bold.ttf
+          weight: 700
