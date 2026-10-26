@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models.dart';
 import '../core/nozelt_engine.dart';
 import '../core/profile.dart';
+import '../core/proxy_marks.dart';
 import '../core/proxy_node.dart';
 import '../core/runtime_rollback.dart';
 import '../core/subscription_client.dart';
@@ -177,6 +178,18 @@ class ProfilesNotifier extends AsyncNotifier<ProfilesState> {
   }) {
     final nodes = resolved.parsed.nodes;
     final mergedNodes = inheritProxyMetadata(current.nodes, nodes);
+    // Pinned and deleted servers stay so after a refresh; servers that left
+    // the subscription drop out of both sets.
+    final pinned = carryNodeMarks(
+      current.pinnedNodeNames,
+      current.nodes,
+      mergedNodes,
+    );
+    final deleted = carryNodeMarks(
+      current.deletedNodeNames,
+      current.nodes,
+      mergedNodes,
+    );
     final selectedStillExists = mergedNodes.any(
       (node) => node.name == current.effectiveSelectedNodeName,
     );
@@ -195,6 +208,8 @@ class ProfilesNotifier extends AsyncNotifier<ProfilesState> {
           ? false
           : current.nameCustomized,
       nodes: mergedNodes,
+      pinnedNodeNames: pinned,
+      deletedNodeNames: deleted,
       providerRouting: resolved.parsed.providerRouting,
       updatedAt: DateTime.now(),
       autoUpdateMinutes: autoUpdateMinutes,
@@ -578,6 +593,9 @@ class ProfilesNotifier extends AsyncNotifier<ProfilesState> {
     );
 
     final nodes = [...profile.nodes]..[index] = replacementNode;
+    Set<String> renamed(Set<String> marks) => marks.contains(originalNodeName)
+        ? {...marks.where((name) => name != originalNodeName), name}
+        : marks;
     final selectedName = profile.effectiveSelectedNodeName == originalNodeName
         ? replacementNode.name
         : profile.effectiveSelectedNodeName;
@@ -585,6 +603,8 @@ class ProfilesNotifier extends AsyncNotifier<ProfilesState> {
       profile.copyWith(
         nodes: nodes,
         selectedNodeName: selectedName,
+        pinnedNodeNames: renamed(profile.pinnedNodeNames),
+        deletedNodeNames: renamed(profile.deletedNodeNames),
         topologyRevision: profile.topologyRevision + 1,
         detectedCore: detectProfileCore(nodes.map((node) => node.raw)),
       ),
@@ -754,6 +774,55 @@ class ProfilesNotifier extends AsyncNotifier<ProfilesState> {
     final profile = _find(id);
     if (profile == null) return;
     await _replace(profile.copyWith(pinned: !profile.pinned));
+  });
+
+  /// Pins a server to the top of its list, or unpins it.
+  Future<void> toggleNodePinned(String profileId, String nodeName) =>
+      _serialized(() async {
+        final profile = _find(profileId);
+        if (profile == null ||
+            !profile.nodes.any((node) => node.name == nodeName)) {
+          return;
+        }
+        final pinned = profile.isNodePinned(nodeName);
+        await _replace(
+          profile.copyWith(
+            pinnedNodeNames: pinned
+                ? profile.pinnedNodeNames.difference({nodeName})
+                : {...profile.pinnedNodeNames, nodeName},
+          ),
+        );
+      });
+
+  /// Moves a server to the "Deleted" section, or restores it. The server
+  /// stays selectable; only automatic selection changes. When the live
+  /// config has automatic groups that change, the engine rebuilds it.
+  Future<void> setNodeDeleted(
+    String profileId,
+    String nodeName,
+    bool deleted,
+  ) => _serialized(() async {
+    final profile = _find(profileId);
+    if (profile == null ||
+        !profile.nodes.any((node) => node.name == nodeName) ||
+        profile.isNodeDeleted(nodeName) == deleted) {
+      return;
+    }
+    final next = profile.copyWith(
+      deletedNodeNames: deleted
+          ? {...profile.deletedNodeNames, nodeName}
+          : profile.deletedNodeNames.difference({nodeName}),
+    );
+    final groupsChanged =
+        next.autoExclusion != profile.autoExclusion &&
+        (usesAutomaticGroups(profile) || usesAutomaticGroups(next));
+    if (groupsChanged) {
+      _rejectActiveMutationDuringTransition(profileId);
+      await _replaceConfigAndRestartIfActive(next);
+    } else {
+      // The auto server may have to leave a server that was just deleted.
+      await _applySelection(profile, next);
+    }
   });
 
   Future<void> delete(String id) => _serialized(() async {
@@ -986,6 +1055,30 @@ class ProfilesNotifier extends AsyncNotifier<ProfilesState> {
     final uri = Uri.tryParse(url);
     return uri == null || uri.host.isEmpty ? 'Nozelt' : uri.host;
   }
+}
+
+/// True when the config generated for [profile] contains automatic groups
+/// whose members depend on the deleted servers.
+@visibleForTesting
+bool usesAutomaticGroups(Profile profile) {
+  const automatic = {'url-test', 'fallback', 'load-balance'};
+  if (profile.effectiveCore == VpnCore.mihomo) {
+    if (profile.nodes.any((node) => node.isAutomaticGroup)) return true;
+    final groups = profile.providerRouting['proxy-groups'];
+    return groups is List &&
+        groups.whereType<Map>().any(
+          (group) => automatic.contains(group['type']?.toString()),
+        );
+  }
+  final native = profile.selectedNode?.raw['nozelt-native-config'];
+  if (native is! Map) return false;
+  final routing = native['routing'];
+  if (routing is Map && routing['balancers'] is List) {
+    return (routing['balancers'] as List).isNotEmpty;
+  }
+  final outbounds = native['outbounds'];
+  return outbounds is List &&
+      outbounds.whereType<Map>().any((item) => item['type'] == 'urltest');
 }
 
 final profilesProvider = AsyncNotifierProvider<ProfilesNotifier, ProfilesState>(

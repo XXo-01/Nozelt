@@ -13,6 +13,7 @@ import '../../state/settings_provider.dart';
 import '../widgets/connection_button.dart';
 import '../widgets/home_cards.dart';
 import '../widgets/latency_card.dart';
+import '../widgets/update_banner.dart';
 
 class DesktopHomeTab extends ConsumerWidget {
   const DesktopHomeTab({required this.onOpenProxies, super.key});
@@ -81,6 +82,7 @@ class DesktopHomeTab extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                const MainUpdateBanner(),
                 if (fold)
                   ConstrainedBox(
                     constraints: BoxConstraints(

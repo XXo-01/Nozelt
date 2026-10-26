@@ -169,12 +169,14 @@ class NodeHealthNotifier extends Notifier<NodeHealthState> {
         final probePlan = ConfigBuilder.buildDelayProbePlan(
           profile.nodes,
           targetNodeNames: nodes.map((node) => node.name),
+          autoExclusion: profile.autoExclusion,
         );
         final config = await ConfigBuilder.buildConfigAsync(
           settings,
           nodes: profile.nodes,
           selectedNodeName: profile.effectiveSelectedNodeName,
           desktopNativeTun: defaultTargetPlatform == TargetPlatform.windows,
+          autoExclusion: profile.autoExclusion,
         );
         if (!ref.mounted) return;
         final completed = <String, int?>{};

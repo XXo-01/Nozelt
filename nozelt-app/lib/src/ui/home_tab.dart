@@ -15,6 +15,7 @@ import '../state/routing_profiles_provider.dart';
 import 'widgets/connection_button.dart';
 import 'widgets/home_cards.dart';
 import 'widgets/latency_card.dart';
+import 'widgets/update_banner.dart';
 
 typedef _HomeProfileSummary = ({
   String? profileId,
@@ -67,6 +68,7 @@ class HomeTab extends ConsumerWidget {
         children: [
           const _BrandHeader(),
           const SizedBox(height: 6),
+          const MainUpdateBanner(),
           // A soft cyan spotlight behind the button, as on Windows.
           Center(
             child: DecoratedBox(

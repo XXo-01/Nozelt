@@ -16,6 +16,7 @@ import 'src/core/windows_shell_bridge.dart';
 import 'src/core/tun_settings.dart';
 import 'src/state/routing_config_controller.dart';
 import 'src/state/app_settings_provider.dart';
+import 'src/state/app_update_provider.dart';
 import 'src/state/engine_provider.dart';
 import 'src/state/geo_data_update_provider.dart';
 import 'src/state/routing_link_provider.dart';
@@ -171,6 +172,8 @@ class NozeltApp extends ConsumerWidget {
     ref.watch(routingLinkCoordinatorProvider);
     // Kept alive without rebuilding the app when a measurement starts.
     ref.listen(nozeltAutoServerProvider, (_, _) {});
+    // Checks GitHub Releases on start and every few hours.
+    ref.listen(appUpdateProvider, (_, _) {});
     // Only locale and appearance need to rebuild MaterialApp. Ping intervals,
     // autoconnect and other settings stay below the root navigator.
     final languageCode = ref.watch(
@@ -261,19 +264,7 @@ class _WindowsShellCoordinatorState
   }
 
   Future<void> _exit() async {
-    // Exit must never hang on a slow core stop. Network protection lives in a
-    // dynamic WFP session, so Windows removes it together with this process.
-    try {
-      await () async {
-        final connection = ref.read(engineStateProvider).connection;
-        if (connection != EngineConnectionState.disconnected) {
-          await ref.read(engineStateProvider.notifier).disconnect();
-        }
-        await ref.read(nozeltEngineProvider).stop();
-      }().timeout(const Duration(seconds: 10));
-    } catch (_) {
-      // Leave anyway; the process exit closes the TUN and the filters.
-    }
+    await stopVpnForExit(ref.read);
     await WindowsShellBridge.instance.requestExit();
   }
 

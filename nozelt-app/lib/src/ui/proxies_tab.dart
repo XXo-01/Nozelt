@@ -34,6 +34,9 @@ class _ProxiesTabState extends ConsumerState<ProxiesTab> {
   final Set<String> _refreshingProfiles = {};
   final Set<String> _collapsedProfiles = {};
 
+  /// Profiles whose "Deleted" section is open. Closed by default.
+  final Set<String> _openDeletedSections = {};
+
   @override
   Widget build(BuildContext context) {
     if (!widget.isVisible) return const SizedBox.shrink();
@@ -63,21 +66,34 @@ class _ProxiesTabState extends ConsumerState<ProxiesTab> {
       final expanded = !_collapsedProfiles.contains(profile.id);
       entries.add(_ProfileListEntry.header(profile, expanded: expanded));
       if (expanded) {
-        // Nozelt's own auto server leads the list when it is turned on.
-        if (profile.supportsNozeltAuto) {
-          entries.add(
-            _ProfileListEntry.node(profile, _autoEntryNode, last: false),
-          );
-        }
-        for (var index = 0; index < profile.nodes.length; index++) {
-          entries.add(
-            _ProfileListEntry.node(
+        final rows = <_ProfileListEntry>[
+          // Nozelt's own auto server leads the list when it is turned on.
+          if (profile.supportsNozeltAuto)
+            _ProfileListEntry.node(profile, _autoEntryNode),
+          // Pinned servers come first; deleted ones sit in their own
+          // collapsible section at the very bottom.
+          for (final node in profile.listedNodes)
+            _ProfileListEntry.node(profile, node),
+        ];
+        final deleted = profile.deletedNodes;
+        if (deleted.isNotEmpty) {
+          final open = _openDeletedSections.contains(profile.id);
+          rows.add(
+            _ProfileListEntry.deletedHeader(
               profile,
-              profile.nodes[index],
-              last: index == profile.nodes.length - 1,
+              count: deleted.length,
+              expanded: open,
             ),
           );
+          if (open) {
+            rows.addAll([
+              for (final node in deleted)
+                _ProfileListEntry.node(profile, node, deleted: true),
+            ]);
+          }
         }
+        if (rows.isNotEmpty) rows.last = rows.last.asLast();
+        entries.addAll(rows);
       }
     }
 
@@ -123,10 +139,37 @@ class _ProxiesTabState extends ConsumerState<ProxiesTab> {
                 final profile = entry.profile;
                 final expanded = entry.expanded;
                 final active = profile.id == state.activeId;
-                final isHeader = entry.node == null;
+                final isHeader = entry.kind == _EntryKind.header;
                 final closesFrame = isHeader
                     ? !expanded || profile.nodes.isEmpty
                     : entry.last;
+
+                if (entry.kind == _EntryKind.deletedHeader) {
+                  return _ProfileFrameSegment(
+                    top: false,
+                    bottom: closesFrame,
+                    active: active,
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        9,
+                        0,
+                        9,
+                        closesFrame ? 9 : 2,
+                      ),
+                      child: _DeletedSectionHeader(
+                        count: entry.count,
+                        expanded: expanded,
+                        onToggle: () => setState(() {
+                          if (expanded) {
+                            _openDeletedSections.remove(profile.id);
+                          } else {
+                            _openDeletedSections.add(profile.id);
+                          }
+                        }),
+                      ),
+                    ),
+                  );
+                }
 
                 return _ProfileFrameSegment(
                   top: isHeader,
@@ -202,6 +245,12 @@ class _ProxiesTabState extends ConsumerState<ProxiesTab> {
                                       .pingNode(profile, entry.node!),
                                   onSettings: () =>
                                       _editNode(profile, entry.node!),
+                                  pinned: profile.isNodePinned(
+                                    entry.node!.name,
+                                  ),
+                                  deleted: entry.deleted,
+                                  onMenuAction: (action) =>
+                                      _nodeAction(profile, entry.node!, action),
                                 ),
                         ),
                 );
@@ -270,6 +319,31 @@ class _ProxiesTabState extends ConsumerState<ProxiesTab> {
       if (mounted) {
         setState(() => _refreshingProfiles.remove(profile.id));
       }
+    }
+  }
+
+  Future<void> _nodeAction(
+    Profile profile,
+    ProxyNode node,
+    _NodeMenuAction action,
+  ) async {
+    final notifier = ref.read(profilesProvider.notifier);
+    try {
+      switch (action) {
+        case _NodeMenuAction.settings:
+          await _editNode(profile, node);
+        case _NodeMenuAction.pin:
+          await notifier.toggleNodePinned(profile.id, node.name);
+        case _NodeMenuAction.delete:
+          await notifier.setNodeDeleted(profile.id, node.name, true);
+        case _NodeMenuAction.restore:
+          await notifier.setNodeDeleted(profile.id, node.name, false);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(localizedUserError(context.l10n, error))),
+      );
     }
   }
 
@@ -480,19 +554,115 @@ class _ProxiesTabState extends ConsumerState<ProxiesTab> {
   ).push(MaterialPageRoute(builder: (_) => const AddProfileScreen()));
 }
 
+enum _EntryKind { header, node, deletedHeader }
+
 class _ProfileListEntry {
   const _ProfileListEntry.header(this.profile, {required this.expanded})
-    : node = null,
+    : kind = _EntryKind.header,
+      node = null,
+      deleted = false,
+      count = 0,
       last = false;
 
-  const _ProfileListEntry.node(this.profile, this.node, {required this.last})
-    : expanded = true;
+  const _ProfileListEntry.node(this.profile, this.node, {this.deleted = false})
+    : kind = _EntryKind.node,
+      expanded = true,
+      count = 0,
+      last = false;
 
+  const _ProfileListEntry.deletedHeader(
+    this.profile, {
+    required this.count,
+    required this.expanded,
+  }) : kind = _EntryKind.deletedHeader,
+       node = null,
+       deleted = false,
+       last = false;
+
+  const _ProfileListEntry._(
+    this.kind,
+    this.profile,
+    this.node,
+    this.expanded,
+    this.deleted,
+    this.count,
+    this.last,
+  );
+
+  final _EntryKind kind;
   final Profile profile;
   final ProxyNode? node;
   final bool expanded;
+  final bool deleted;
+  final int count;
   final bool last;
+
+  _ProfileListEntry asLast() =>
+      _ProfileListEntry._(kind, profile, node, expanded, deleted, count, true);
 }
+
+/// Header of the collapsible "Deleted" section at the bottom of a profile.
+class _DeletedSectionHeader extends StatelessWidget {
+  const _DeletedSectionHeader({
+    required this.count,
+    required this.expanded,
+    required this.onToggle,
+  });
+
+  final int count;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final title = context.tr('deletedProxies');
+    return Semantics(
+      button: true,
+      expanded: expanded,
+      label: '$title $count',
+      excludeSemantics: true,
+      child: NozeltSurface(
+        onTap: onToggle,
+        outlined: false,
+        color: theme.colorScheme.surface,
+        padding: const EdgeInsets.fromLTRB(4, 4, 13, 4),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 40,
+              height: 36,
+              child: AnimatedRotation(
+                turns: expanded ? 0 : -0.25,
+                duration: const Duration(milliseconds: 180),
+                child: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: NozeltSpacing.sm),
+            _SmallChip(label: '$count'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _NodeMenuAction { settings, pin, delete, restore }
 
 class _ProfileFrameSegment extends StatelessWidget {
   const _ProfileFrameSegment({
@@ -563,6 +733,9 @@ class _NodeTile extends ConsumerWidget {
     required this.onPing,
     required this.onSettings,
     this.autoPick,
+    this.pinned = false,
+    this.deleted = false,
+    this.onMenuAction,
   });
 
   final String profileId;
@@ -571,6 +744,11 @@ class _NodeTile extends ConsumerWidget {
   final VoidCallback onTap;
   final VoidCallback? onPing;
   final VoidCallback? onSettings;
+  final bool pinned;
+  final bool deleted;
+
+  /// Server menu: proxy settings, pin/unpin, delete/restore.
+  final ValueChanged<_NodeMenuAction>? onMenuAction;
 
   /// Set for the Nozelt auto server row: the server it currently uses.
   final ProxyNode? autoPick;
@@ -633,8 +811,23 @@ class _NodeTile extends ConsumerWidget {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _AdaptiveNodeTitle(
-                        _auto ? Profile.nozeltAutoName : node.displayName,
+                      Row(
+                        children: [
+                          if (pinned) ...[
+                            Icon(
+                              Icons.push_pin_rounded,
+                              size: desktop ? 14 : 15,
+                              color: nozeltIconAccent(context),
+                              semanticLabel: context.tr('nodePinned'),
+                            ),
+                            const SizedBox(width: 4),
+                          ],
+                          Expanded(
+                            child: _AdaptiveNodeTitle(
+                              _auto ? Profile.nozeltAutoName : node.displayName,
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 4),
                       Wrap(
@@ -677,12 +870,59 @@ class _NodeTile extends ConsumerWidget {
                 ),
                 // The auto server has no settings: its ping button takes the
                 // right-hand place of the settings button.
-                if (onSettings != null) ...[
+                if (onMenuAction != null && desktop) ...[
+                  const SizedBox(width: NozeltSpacing.sm),
+                  NozeltPopupMenuButton<_NodeMenuAction>(
+                    tooltip: context.tr('proxyActions'),
+                    // Same round size as the ping button.
+                    style: nozeltOutlinedIconStyle(context)?.copyWith(
+                      fixedSize: WidgetStatePropertyAll(
+                        _desktopRowButtonSize.biggest,
+                      ),
+                      minimumSize: WidgetStatePropertyAll(
+                        _desktopRowButtonSize.biggest,
+                      ),
+                    ),
+                    padding: EdgeInsets.zero,
+                    icon: const Icon(Icons.more_horiz_rounded, size: 23),
+                    onSelected: onMenuAction,
+                    itemBuilder: (context) => [
+                      PopupMenuItem(
+                        value: _NodeMenuAction.settings,
+                        child: Text(context.tr('nodeSettings')),
+                      ),
+                      PopupMenuItem(
+                        value: _NodeMenuAction.pin,
+                        child: Text(
+                          context.tr(pinned ? 'unpinProfile' : 'pinProfile'),
+                        ),
+                      ),
+                      const PopupMenuDivider(height: 1),
+                      PopupMenuItem(
+                        value: deleted
+                            ? _NodeMenuAction.restore
+                            : _NodeMenuAction.delete,
+                        child: Text(
+                          context.tr(deleted ? 'restoreProxy' : 'delete'),
+                          style: deleted
+                              ? null
+                              : TextStyle(
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else if (onMenuAction != null || onSettings != null) ...[
                   const SizedBox(width: NozeltSpacing.sm),
                   IconButton(
-                    tooltip: context.tr('nodeSettings'),
+                    tooltip: context.tr(
+                      onMenuAction != null ? 'proxyActions' : 'nodeSettings',
+                    ),
                     style: nozeltOutlinedIconStyle(context),
-                    onPressed: onSettings,
+                    onPressed: onMenuAction != null
+                        ? () => _showMenuSheet(context)
+                        : onSettings,
                     constraints: desktop
                         ? _desktopRowButtonSize
                         : const BoxConstraints.tightFor(width: 44, height: 44),
@@ -716,6 +956,61 @@ class _NodeTile extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// Android shows the server menu as a bottom sheet, like the profile menu.
+  Future<void> _showMenuSheet(BuildContext context) async {
+    final scheme = Theme.of(context).colorScheme;
+    final action = await showModalBottomSheet<_NodeMenuAction>(
+      context: context,
+      backgroundColor: scheme.surfaceContainerHighest,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.tune_rounded),
+                title: Text(context.tr('nodeSettings')),
+                onTap: () =>
+                    Navigator.pop(sheetContext, _NodeMenuAction.settings),
+              ),
+              ListTile(
+                leading: Icon(
+                  pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+                  color: pinned ? scheme.onSurfaceVariant : scheme.primary,
+                ),
+                title: Text(context.tr(pinned ? 'unpinProfile' : 'pinProfile')),
+                onTap: () => Navigator.pop(sheetContext, _NodeMenuAction.pin),
+              ),
+              if (deleted)
+                ListTile(
+                  leading: const Icon(Icons.restore_rounded),
+                  title: Text(context.tr('restoreProxy')),
+                  onTap: () =>
+                      Navigator.pop(sheetContext, _NodeMenuAction.restore),
+                )
+              else
+                ListTile(
+                  leading: Icon(
+                    Icons.delete_outline_rounded,
+                    color: scheme.error,
+                  ),
+                  title: Text(
+                    context.tr('delete'),
+                    style: TextStyle(color: scheme.error),
+                  ),
+                  onTap: () =>
+                      Navigator.pop(sheetContext, _NodeMenuAction.delete),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (action != null) onMenuAction?.call(action);
   }
 
   static String _delayLabel(BuildContext context, NodeDelay? delay) {

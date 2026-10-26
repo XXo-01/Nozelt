@@ -16,6 +16,7 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import dev.nozelt.nozelt.NozeltLog as Log
 import androidx.core.app.ActivityCompat
+import androidx.core.content.FileProvider
 import androidx.core.graphics.createBitmap
 import androidx.lifecycle.lifecycleScope
 import io.flutter.embedding.android.FlutterActivity
@@ -174,6 +175,13 @@ class MainActivity : FlutterActivity() {
             }
             "openVpnSettings" -> handleOpenVpnSettings(result)
             "openExternalUrl" -> handleOpenExternalUrl(call, result)
+            "getUpdateEnvironment" -> result.success(
+                mapOf(
+                    "abis" to Build.SUPPORTED_ABIS.toList(),
+                    "directory" to updateDirectory().absolutePath,
+                ),
+            )
+            "installUpdate" -> handleInstallUpdate(call, result)
             "prepareVpn" -> handlePrepareVpn(result)
             "pickConfigFile" -> handlePickConfigFile(result)
             "getInstalledApps" -> handleGetInstalledApps(result)
@@ -950,6 +958,65 @@ class MainActivity : FlutterActivity() {
                 "Could not create subscription device identifier",
                 null,
             )
+        }
+    }
+
+    private fun updateDirectory(): File = File(cacheDir, "updates").apply { mkdirs() }
+
+    /**
+     * Hands a downloaded, SHA-256-verified Nozelt APK to the system installer.
+     * Only files in the private update cache are accepted, and only an APK of
+     * this package with a newer version. Android itself rejects a different
+     * signing key. Returns "permission" after opening the "install unknown
+     * apps" page when that permission is still missing.
+     */
+    @Suppress("DEPRECATION")
+    private fun handleInstallUpdate(call: MethodCall, result: MethodChannel.Result) {
+        val directory = updateDirectory().canonicalFile
+        val file = call.argument<String>("path")?.let { File(it).canonicalFile }
+        if (file == null || file.parentFile != directory || !file.isFile ||
+            !file.name.endsWith(".apk")
+        ) {
+            result.error("invalid_update", "Update file is not in the update cache", null)
+            return
+        }
+        try {
+            val archive = packageManager.getPackageArchiveInfo(file.path, 0)
+            val installed = packageManager.getPackageInfo(packageName, 0)
+            val newer = archive != null && archive.packageName == packageName &&
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    archive.longVersionCode > installed.longVersionCode
+                } else {
+                    archive.versionCode > installed.versionCode
+                })
+            if (!newer) {
+                result.error("invalid_update", "Not a newer Nozelt build", null)
+                return
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !packageManager.canRequestPackageInstalls()
+            ) {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:$packageName"),
+                    ),
+                )
+                result.success("permission")
+                return
+            }
+            val uri = FileProvider.getUriForFile(this, "$packageName.updates", file)
+            startActivity(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+            result.success("started")
+        } catch (_: Throwable) {
+            Log.e(TAG, "could not start the update installer")
+            result.error("install_failed", "Could not start the installer", null)
         }
     }
 

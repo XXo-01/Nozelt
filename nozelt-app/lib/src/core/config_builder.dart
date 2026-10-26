@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
+import 'proxy_marks.dart';
 import 'proxy_node.dart';
 import 'routing_rule.dart';
 import 'tun_settings.dart';
@@ -97,6 +100,7 @@ class ConfigBuilder {
     bool desktopNativeTun = false,
     Map<String, dynamic> providerRouting = const {},
     String providerCacheKey = 'profile',
+    AutoExclusion autoExclusion = AutoExclusion.none,
   }) {
     if (s.validationKey() case final String error) {
       throw ArgumentError(error);
@@ -117,7 +121,7 @@ class ConfigBuilder {
     final safeSelection = selectedIndex >= 0
         ? safeNodes[selectedIndex].name
         : safeNodes.first.name;
-    final expanded = _expandAutomaticNodes(safeNodes);
+    final expanded = _expandAutomaticNodes(safeNodes, autoExclusion);
     final config = <String, dynamic>{
       // A TUN-only Android client must not expose localhost proxy/controller
       // sockets: Android apps share the device network namespace and another
@@ -185,6 +189,7 @@ class ConfigBuilder {
         providerRouting,
         safeNodes,
         providerCacheKey,
+        autoExclusion,
       );
     }
     if (desktopNativeTun && s.routingMode == RoutingMode.rule) {
@@ -221,6 +226,7 @@ class ConfigBuilder {
     Map<String, dynamic> source,
     List<ProxyNode> nodes,
     String cacheKey,
+    AutoExclusion autoExclusion,
   ) {
     final routing = (jsonDecode(jsonEncode(source)) as Map)
         .cast<String, dynamic>();
@@ -333,6 +339,14 @@ class ConfigBuilder {
       }
       group['proxies'] = members;
     }
+    excludeDeletedFromAutomaticGroups(
+      groups.map((group) => group.cast<String, dynamic>()).toList(),
+      [
+        for (final proxy in (config['proxies'] as List).whereType<Map>())
+          proxy['name'].toString(),
+      ],
+      autoExclusion,
+    );
     String rewriteRule(Object? raw) {
       final parts = raw.toString().split(',');
       if (parts.length < 2) throw StateError('Invalid provider routing rule.');
@@ -404,6 +418,7 @@ class ConfigBuilder {
     List<ProxyNode> nodes = const [],
     String? selectedNodeName,
     bool desktopNativeTun = false,
+    AutoExclusion autoExclusion = AutoExclusion.none,
   }) {
     return Isolate.run(
       () => buildConfig(
@@ -411,6 +426,7 @@ class ConfigBuilder {
         nodes: nodes,
         selectedNodeName: selectedNodeName,
         desktopNativeTun: desktopNativeTun,
+        autoExclusion: autoExclusion,
       ),
     );
   }
@@ -422,11 +438,12 @@ class ConfigBuilder {
   static DelayProbePlan buildDelayProbePlan(
     List<ProxyNode> nodes, {
     required Iterable<String> targetNodeNames,
+    AutoExclusion autoExclusion = AutoExclusion.none,
   }) {
     if (nodes.isEmpty) return const DelayProbePlan._({}, {});
     final targets = targetNodeNames.toSet();
     final safeNodes = ProxyNode.normalizeNames(nodes);
-    final expanded = _expandAutomaticNodes(safeNodes);
+    final expanded = _expandAutomaticNodes(safeNodes, autoExclusion);
     final namesByNode = <String, List<String>>{};
     final testUrlsByNativeName = <String, String>{};
     for (var index = 0; index < nodes.length; index++) {
@@ -654,12 +671,92 @@ class ConfigBuilder {
     ];
   }
 
+  /// Leaves deleted servers out of the provider's url-test, fallback and
+  /// load-balance groups. A group that would end up empty keeps its members:
+  /// an empty Mihomo group falls back to a direct connection.
+  @visibleForTesting
+  static void excludeDeletedFromAutomaticGroups(
+    List<Map<String, dynamic>> groups,
+    List<String> proxyNames,
+    AutoExclusion exclusion,
+  ) {
+    if (exclusion.names.isEmpty) return;
+    const automatic = {'url-test', 'fallback', 'load-balance'};
+    for (final group in groups) {
+      if (!automatic.contains(group['type'])) continue;
+      final explicit = [
+        for (final member in (group['proxies'] as List?) ?? const [])
+          member.toString(),
+      ];
+      final includesAll =
+          group['include-all'] == true || group['include-all-proxies'] == true;
+      if (!includesAll) {
+        if (explicit.isEmpty) continue;
+        group['proxies'] = AutoExclusion.keepNonEmpty(
+          explicit,
+          exclusion.names.contains,
+        );
+        continue;
+      }
+      // Mihomo adds every proxy matching `filter`, then applies
+      // `exclude-filter` to all members. Add the deleted names to that
+      // filter only when Nozelt can tell the group keeps a member.
+      final filters = _mihomoPatterns(group['filter']);
+      final excludes = _mihomoPatterns(group['exclude-filter']);
+      if (filters == null || excludes == null) continue;
+      final members = [
+        ...explicit,
+        ...proxyNames.where(
+          (name) => filters.isEmpty || filters.any((re) => re.hasMatch(name)),
+        ),
+      ].where((name) => !excludes.any((re) => re.hasMatch(name)));
+      if (!members.any((name) => !exclusion.names.contains(name))) continue;
+      final names = exclusion.names.toList()..sort();
+      final pattern =
+          '^(?:${names.map((name) => RegExp.escape(name).replaceAll('`', r'`')).join('|')})\$';
+      final existing = group['exclude-filter']?.toString() ?? '';
+      group['exclude-filter'] = existing.isEmpty
+          ? pattern
+          : '$existing`$pattern';
+    }
+  }
+
+  /// Mihomo's backtick-separated group patterns as Dart expressions, or null
+  /// when one cannot be read the same way.
+  static List<RegExp>? _mihomoPatterns(Object? value) {
+    final text = value?.toString() ?? '';
+    if (text.isEmpty) return const [];
+    final result = <RegExp>[];
+    for (var pattern in text.split('`')) {
+      var caseSensitive = true;
+      if (pattern.startsWith('(?i)')) {
+        pattern = pattern.substring(4);
+        caseSensitive = false;
+      }
+      if (pattern.contains('(?')) {
+        // Other inline options and look-arounds differ between engines.
+        if (RegExp(r'\(\?[a-zA-Z]').hasMatch(pattern)) return null;
+      }
+      try {
+        result.add(
+          RegExp(pattern, caseSensitive: caseSensitive, unicode: true),
+        );
+      } on FormatException {
+        return null;
+      }
+    }
+    return result;
+  }
+
   static ({
     List<Map<String, dynamic>> proxies,
     List<Map<String, dynamic>> groups,
     Map<String, List<String>> probeNames,
   })
-  _expandAutomaticNodes(List<ProxyNode> nodes) {
+  _expandAutomaticNodes(
+    List<ProxyNode> nodes, [
+    AutoExclusion exclusion = AutoExclusion.none,
+  ]) {
     final proxies = <Map<String, dynamic>>[];
     final groups = <Map<String, dynamic>>[];
     final probeNames = <String, List<String>>{};
@@ -677,7 +774,14 @@ class ConfigBuilder {
       groupIndex++;
       final memberNames = <String>[];
       var memberIndex = 0;
-      for (final source in node.automaticMembers) {
+      // Members that are copies of deleted servers are left out, unless that
+      // would leave the group empty.
+      final sources = AutoExclusion.keepNonEmpty(
+        node.automaticMembers,
+        (member) =>
+            exclusion.excludesEndpoint(member['server'], member['port']),
+      );
+      for (final source in sources) {
         memberIndex++;
         var name = '__Nozelt auto $groupIndex member $memberIndex';
         while (!usedNames.add(name.toLowerCase())) {

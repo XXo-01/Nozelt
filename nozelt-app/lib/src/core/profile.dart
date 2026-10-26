@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'proxy_marks.dart';
 import 'proxy_node.dart';
 import 'vpn_core.dart';
 
@@ -260,6 +261,8 @@ class Profile {
     this.detectedCore = VpnCore.mihomo,
     this.nozeltAuto = false,
     this.autoPickName,
+    this.pinnedNodeNames = const {},
+    this.deletedNodeNames = const {},
   }) : autoUpdateMinutes = autoUpdateMinutes ?? autoUpdateHours * 60;
 
   /// Selection id of Nozelt's own automatic server. It is not a node: while
@@ -274,6 +277,51 @@ class Profile {
   /// Real server currently chosen by the Nozelt auto server.
   final String? autoPickName;
 
+  /// Servers the user pinned: shown first in their list. Refresh keeps them.
+  final Set<String> pinnedNodeNames;
+
+  /// Servers the user deleted: shown in the collapsed "Deleted" section at
+  /// the bottom of the profile. They still come from the subscription (a
+  /// refresh updates their parameters), can be selected by hand, but
+  /// automatic selection skips them.
+  final Set<String> deletedNodeNames;
+
+  bool isNodePinned(String name) => pinnedNodeNames.contains(name);
+
+  bool isNodeDeleted(String name) => deletedNodeNames.contains(name);
+
+  /// Servers outside the "Deleted" section, pinned first, in list order.
+  List<ProxyNode> get listedNodes =>
+      _ordered(nodes.where((node) => !deletedNodeNames.contains(node.name)));
+
+  /// The "Deleted" section, pinned first, in list order.
+  List<ProxyNode> get deletedNodes => deletedNodeNames.isEmpty
+      ? const []
+      : _ordered(nodes.where((node) => deletedNodeNames.contains(node.name)));
+
+  List<ProxyNode> _ordered(Iterable<ProxyNode> source) {
+    final list = source.toList(growable: false);
+    if (pinnedNodeNames.isEmpty) return list;
+    return [
+      ...list.where((node) => pinnedNodeNames.contains(node.name)),
+      ...list.where((node) => !pinnedNodeNames.contains(node.name)),
+    ];
+  }
+
+  /// Servers the Nozelt auto server may use. With every server deleted it
+  /// falls back to the full list instead of having nothing to pick.
+  List<ProxyNode> get autoCandidates {
+    if (deletedNodeNames.isEmpty) return nodes;
+    final kept = nodes
+        .where((node) => !deletedNodeNames.contains(node.name))
+        .toList(growable: false);
+    return kept.isEmpty ? nodes : kept;
+  }
+
+  /// What the config builders leave out of automatic groups.
+  AutoExclusion get autoExclusion =>
+      AutoExclusion.forNodes(nodes, deletedNodeNames);
+
   /// Any profile with at least two servers can use the auto server.
   bool get supportsNozeltAuto => nozeltAuto && nodes.length >= 2;
 
@@ -284,10 +332,11 @@ class Profile {
   /// The real server the auto server currently uses.
   ProxyNode? get autoPick {
     if (!supportsNozeltAuto) return null;
-    for (final node in nodes) {
+    final candidates = autoCandidates;
+    for (final node in candidates) {
       if (node.name == autoPickName) return node;
     }
-    return nodes.first;
+    return candidates.first;
   }
 
   final String id;
@@ -405,6 +454,8 @@ class Profile {
     VpnCore? detectedCore,
     bool? nozeltAuto,
     String? autoPickName,
+    Set<String>? pinnedNodeNames,
+    Set<String>? deletedNodeNames,
   }) {
     final next = Profile(
       id: id,
@@ -433,6 +484,8 @@ class Profile {
       detectedCore: detectedCore ?? this.detectedCore,
       nozeltAuto: nozeltAuto ?? this.nozeltAuto,
       autoPickName: autoPickName ?? this.autoPickName,
+      pinnedNodeNames: pinnedNodeNames ?? this.pinnedNodeNames,
+      deletedNodeNames: deletedNodeNames ?? this.deletedNodeNames,
     );
     return next;
   }
@@ -455,11 +508,21 @@ class Profile {
     // The auto server stays selected across restarts; its pick is separate.
     'selectedNodeName': autoSelected ? nozeltAutoId : effectiveSelectedNodeName,
     'autoPickName': autoPick?.name,
+    'pinnedNodes': _existing(pinnedNodeNames),
+    'deletedNodes': _existing(deletedNodeNames),
     'topologyRevision': topologyRevision,
     'coreMode': coreMode.name,
     'manualCore': manualCore.wireName,
     'detectedCore': detectedCore.wireName,
   };
+
+  /// Marks of servers that are still in the profile, in list order.
+  List<String> _existing(Set<String> marks) => marks.isEmpty
+      ? const []
+      : [
+          for (final node in nodes)
+            if (marks.contains(node.name)) node.name,
+        ];
 
   factory Profile.fromJson(Map<String, dynamic> json) {
     final parsedNodes = ((json['nodes'] as List?) ?? const [])
@@ -472,6 +535,16 @@ class Profile {
         ? -1
         : parsedNodes.indexWhere((node) => node.name == storedSelection);
     final nodes = ProxyNode.normalizeNames(parsedNodes);
+    // Names are re-normalized on load; marks follow their server by index.
+    final normalizedNames = <String, String>{
+      for (var i = 0; i < nodes.length; i++) parsedNodes[i].name: nodes[i].name,
+    };
+    Set<String> marks(Object? value) => {
+      if (value is List)
+        for (final name in value)
+          if (normalizedNames[name?.toString()] case final String mapped)
+            mapped,
+    };
     final type = ProfileType.fromName(json['type'] as String?);
     final source = json['source'] as String? ?? '';
     final name = normalizeProfileName(json['name']?.toString() ?? '');
@@ -532,6 +605,8 @@ class Profile {
           : detectProfileCore(nodes.map((node) => node.raw)),
       nozeltAuto: json['nozeltAuto'] as bool? ?? false,
       autoPickName: json['autoPickName'] as String?,
+      pinnedNodeNames: marks(json['pinnedNodes']),
+      deletedNodeNames: marks(json['deletedNodes']),
     );
   }
 }

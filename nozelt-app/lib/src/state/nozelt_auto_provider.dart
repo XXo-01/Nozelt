@@ -103,7 +103,8 @@ class NozeltAutoServer extends Notifier<bool> {
   static String? choose(Profile profile, int? Function(String name) delayOf) {
     String? bestName;
     int? best;
-    for (final node in profile.nodes) {
+    // Deleted servers stay selectable by hand but never by the auto server.
+    for (final node in profile.autoCandidates) {
       final delay = delayOf(node.name);
       if (delay == null || delay <= 0) continue;
       if (best == null || delay < best) {

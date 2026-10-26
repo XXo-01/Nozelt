@@ -9,12 +9,14 @@ import '../core/app_settings.dart';
 import '../l10n/nozelt_l10n.dart';
 import '../l10n/user_error.dart';
 import '../state/app_settings_provider.dart';
+import '../state/app_update_provider.dart';
 import '../state/engine_provider.dart';
 import '../state/routing_config_controller.dart';
 import '../state/settings_provider.dart';
 import 'always_on_vpn_screen.dart';
 import 'diagnostics_screen.dart';
 import 'network_settings_screen.dart';
+import 'widgets/update_banner.dart';
 
 class SettingsTab extends ConsumerWidget {
   const SettingsTab({this.isVisible = true, super.key});
@@ -202,6 +204,22 @@ class SettingsTab extends ConsumerWidget {
                           appSettings.pingIntervalSeconds,
                         ),
                       ),
+                      const Divider(height: 1, indent: 60),
+                      NozeltSwitchTile(
+                        secondary: Icon(
+                          Icons.system_update_alt_rounded,
+                          color: nozeltIconAccent(context),
+                        ),
+                        title: Text(context.tr('offerUpdates')),
+                        value: ref.watch(
+                          appUpdateProvider.select(
+                            (state) => state.offerUpdates,
+                          ),
+                        ),
+                        onChanged: ref
+                            .read(appUpdateProvider.notifier)
+                            .setOfferUpdates,
+                      ),
                     ],
                   ),
                 ),
@@ -333,6 +351,7 @@ class SettingsTab extends ConsumerWidget {
               children: [
                 NozeltSectionTitle(context.tr('about')),
                 const SizedBox(height: 10),
+                const SettingsUpdateBanner(),
                 const _AboutCard(),
               ],
             ),

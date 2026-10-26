@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nozelt/src/data/app_preferences.dart';
 
 import 'package:nozelt/main.dart';
+import 'package:nozelt/src/core/app_metadata.dart';
 import 'package:nozelt/src/state/settings_provider.dart';
 
 void main() {
@@ -20,7 +21,7 @@ void main() {
     expect(find.text('Подключить'), findsOneWidget);
     expect(find.text('Главная'), findsOneWidget);
     expect(find.text('Прокси'), findsOneWidget);
-    expect(find.text('1.0.0'), findsOneWidget);
+    expect(find.text(AppMetadata.version), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Глобально'),
       300,
@@ -41,6 +42,9 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     expect(find.text('Онлайн-определение страны'), findsNothing);
+    // Keep the row clear of the floating bottom navigation bar.
+    await Scrollable.ensureVisible(tester.element(alwaysOn), alignment: 0.3);
+    await tester.pumpAndSettle();
     await tester.tap(alwaysOn);
     await tester.pumpAndSettle();
 

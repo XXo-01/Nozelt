@@ -2,9 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'config_builder.dart';
 import 'config_error.dart';
 import 'profile.dart';
+import 'proxy_marks.dart';
 import 'proxy_node.dart';
 import 'routing_rule.dart';
 import 'tun_settings.dart';
@@ -126,6 +129,7 @@ class MultiCoreConfigBuilder {
         desktopNativeTun: desktopNativeTun,
         providerRouting: profile.providerRouting,
         providerCacheKey: profile.id,
+        autoExclusion: profile.autoExclusion,
       ),
       VpnCore.xray => _buildXray(
         settings,
@@ -627,6 +631,9 @@ class MultiCoreConfigBuilder {
         'servers': settings.nameservers,
       },
     );
+    if (native is Map) {
+      excludeFromXrayBalancers(document, profile.autoExclusion);
+    }
     final dnsOutboundTag = _ensureXrayDnsOutbound(document);
     _ensureXrayDnsRule(document, dnsOutboundTag);
     if (native is Map && !windowsTransport) {
@@ -677,6 +684,143 @@ class MultiCoreConfigBuilder {
     ];
     document['log'] = {'loglevel': 'warning'};
     return jsonEncode(document);
+  }
+
+  /// Every `address`/`port` pair an Xray outbound dials.
+  static Set<String> _xrayEndpointKeys(Map outbound) {
+    final keys = <String>{};
+    void walk(Object? value) {
+      if (value is Map) {
+        if (value['address'] is String && value['port'] != null) {
+          keys.add(AutoExclusion.endpointKey(value['address'], value['port']));
+        }
+        value.values.forEach(walk);
+      } else if (value is List) {
+        value.forEach(walk);
+      }
+    }
+
+    walk(outbound['settings']);
+    return keys;
+  }
+
+  /// Leaves deleted servers out of a native Xray document's balancers.
+  /// Balancers pick members by tag prefix, so excluded outbounds get a tag no
+  /// selector matches; references to them follow. A balancer that would be
+  /// left without members keeps them all.
+  @visibleForTesting
+  static void excludeFromXrayBalancers(
+    Map<String, dynamic> document,
+    AutoExclusion exclusion,
+  ) {
+    if (exclusion.endpoints.isEmpty) return;
+    final routing = document['routing'];
+    final balancers = routing is Map ? routing['balancers'] : null;
+    if (balancers is! List || balancers.isEmpty) return;
+    final outbounds = (document['outbounds'] as List? ?? const [])
+        .whereType<Map>()
+        .toList();
+    final prefixes = <String>{
+      for (final balancer in balancers.whereType<Map>())
+        for (final prefix in (balancer['selector'] as List?) ?? const [])
+          prefix.toString(),
+    };
+    for (final key in const ['observatory', 'burstObservatory']) {
+      if (document[key] case final Map observatory) {
+        for (final prefix
+            in (observatory['subjectSelector'] as List?) ?? const []) {
+          prefixes.add(prefix.toString());
+        }
+      }
+    }
+    bool selected(Object? tag) =>
+        prefixes.any((prefix) => tag.toString().startsWith(prefix));
+    final renames = <String, String>{};
+    for (final balancer in balancers.whereType<Map>()) {
+      final own = [
+        for (final prefix in (balancer['selector'] as List?) ?? const [])
+          prefix.toString(),
+      ];
+      final members = outbounds
+          .where(
+            (item) =>
+                !{'freedom', 'blackhole', 'dns'}.contains(item['protocol']) &&
+                own.any((prefix) => item['tag'].toString().startsWith(prefix)),
+          )
+          .toList();
+      final excluded = members
+          .where(
+            (item) => _xrayEndpointKeys(item).any(exclusion.endpoints.contains),
+          )
+          .toList();
+      if (excluded.isEmpty || excluded.length == members.length) continue;
+      for (final item in excluded) {
+        final tag = item['tag'].toString();
+        if (renames.containsKey(tag)) continue;
+        var next = 'nozelt-excluded-${renames.length + 1}';
+        while (selected(next) ||
+            outbounds.any((other) => other['tag'] == next)) {
+          next = '~$next';
+          if (next.length > 64) return;
+        }
+        renames[tag] = next;
+      }
+    }
+    if (renames.isEmpty) return;
+    for (final item in outbounds) {
+      final tag = item['tag']?.toString();
+      if (renames[tag] case final String next) item['tag'] = next;
+    }
+    void retarget(Object? value) {
+      if (value is Map) {
+        for (final key in const ['outboundTag', 'fallbackTag', 'dialerProxy']) {
+          final current = value[key];
+          if (current is String && renames.containsKey(current)) {
+            value[key] = renames[current];
+          }
+        }
+        value.values.forEach(retarget);
+      } else if (value is List) {
+        value.forEach(retarget);
+      }
+    }
+
+    retarget(document['routing']);
+    for (final item in outbounds) {
+      retarget(item['streamSettings']);
+      if (item['proxySettings'] case final Map proxy) {
+        final current = proxy['tag'];
+        if (current is String && renames.containsKey(current)) {
+          proxy['tag'] = renames[current];
+        }
+      }
+    }
+  }
+
+  /// Leaves deleted servers out of a native sing-box document's urltest
+  /// outbounds, unless that would leave one empty.
+  @visibleForTesting
+  static void excludeFromSingBoxUrlTests(
+    Map<String, dynamic> document,
+    AutoExclusion exclusion,
+  ) {
+    if (exclusion.endpoints.isEmpty) return;
+    final outbounds = (document['outbounds'] as List? ?? const [])
+        .whereType<Map>()
+        .toList();
+    final byTag = {for (final item in outbounds) item['tag']: item};
+    bool excluded(Object? tag) {
+      final item = byTag[tag];
+      return item != null &&
+          item['server'] != null &&
+          exclusion.excludesEndpoint(item['server'], item['server_port']);
+    }
+
+    for (final item in outbounds.where((item) => item['type'] == 'urltest')) {
+      final members = (item['outbounds'] as List?)?.toList();
+      if (members == null || members.isEmpty) continue;
+      item['outbounds'] = AutoExclusion.keepNonEmpty(members, excluded);
+    }
   }
 
   static String _ensureXrayDnsOutbound(Map<String, dynamic> document) {
@@ -1120,6 +1264,7 @@ class MultiCoreConfigBuilder {
     if (node.raw['nozelt-native-core'] == VpnCore.singBox.wireName &&
         native is Map) {
       final document = _deepMap(native);
+      excludeFromSingBoxUrlTests(document, profile.autoExclusion);
       document['inbounds'] = [
         _singBoxTun(settings, desktopNativeTun: desktopNativeTun),
       ];

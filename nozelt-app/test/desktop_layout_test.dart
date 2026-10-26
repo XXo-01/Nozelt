@@ -262,7 +262,7 @@ void main() {
       final rowPing = tester.getRect(
         find.byTooltip('Проверить задержку').first,
       );
-      final rowMore = tester.getRect(find.byTooltip('Настройки прокси').first);
+      final rowMore = tester.getRect(find.byTooltip('Действия с прокси').first);
       expect(rowMore.left - rowPing.right, headerMore.left - headerPing.right);
       expect(rowMore.size, headerMore.size);
       expect(rowMore.right, headerMore.right);

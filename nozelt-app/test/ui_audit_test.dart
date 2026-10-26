@@ -171,7 +171,9 @@ void main() {
       await tester.tap(find.text('Ссылки').first);
       await snapshot(tester, '${entry.key}_add_links');
       await tab(tester, Icons.dns_rounded);
-      await tester.tap(find.byTooltip('Настройки прокси').first);
+      await tester.tap(find.byTooltip('Действия с прокси').first);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.text('Настройки прокси').last);
       await tester.pump(const Duration(milliseconds: 400));
       await snapshot(tester, '${entry.key}_proxy_settings');
       await tab(tester, Icons.alt_route_rounded);
