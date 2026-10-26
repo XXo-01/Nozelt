@@ -19,7 +19,7 @@ import 'package:nozelt/src/ui/proxies_tab.dart' show subscriptionClock;
 
 import 'support/ui_audit_fixtures.dart';
 
-/// Reference screens of the 1.1.0 features: the server menu, the "Deleted"
+/// Reference screens of the 1.0.1 features: the server menu, the "Deleted"
 /// section and the update banners, on Windows and Android, dark and light.
 
 class _Binding extends AutomatedTestWidgetsFlutterBinding {
@@ -108,7 +108,7 @@ void main() {
     expect(tester.takeException(), isNull, reason: name);
     await expectLater(
       find.byType(MaterialApp),
-      matchesGoldenFile('goldens/v110/$name.png'),
+      matchesGoldenFile('goldens/v101/$name.png'),
     );
   }
 
@@ -119,7 +119,7 @@ void main() {
     ]) {
       final windows = platform == TargetPlatform.windows;
       final prefix = '${windows ? 'windows' : 'android'}_${appearance.name}';
-      testWidgets('1.1.0 screens $prefix', (tester) async {
+      testWidgets('1.0.1 screens $prefix', (tester) async {
         await boot(
           tester,
           windows ? const Size(1180, 760) : const Size(412, 915),
